@@ -10,8 +10,30 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10kb' })); // Limit payload size
 app.use(express.static(path.join(__dirname)));
+
+// Security Headers (production)
+if (process.env.NODE_ENV === 'production') {
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    res.setHeader('Referrer-Policy', 'no-referrer-when-downgrade');
+    next();
+  });
+}
+
+// Health check endpoint (required for Docker healthcheck)
+app.get('/health', (req, res) => {
+  const status = mongoose.connection.readyState === 1 ? 'healthy' : 'degraded';
+  res.status(status === 'healthy' ? 200 : 503).json({
+    status,
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+    db: status
+  });
+});
 
 // Connect to MongoDB
 mongoose.connect('mongodb+srv://ahsan786:Ahsan%40786@cluster0.7affurj.mongodb.net/incredibleindia?appName=Cluster0')
@@ -135,7 +157,8 @@ app.get('/api/bookings', async (req, res) => {
   }
 });
 
-// Start server
-app.listen(PORT, () => {
+// Start server — 0.0.0.0 allows access from mobile/other devices on same network
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Network access: http://172.22.135.133:${PORT}`);
 });

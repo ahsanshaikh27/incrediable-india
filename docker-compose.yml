@@ -1,0 +1,199 @@
+version: "3.9"
+
+# ============================================================
+#  NETWORKS
+# ============================================================
+networks:
+  frontend-net:
+    driver: bridge   # nginx <-> backend communication
+  backend-net:
+    driver: bridge   # backend <-> mongodb/redis communication
+    internal: true   # NOT exposed to outside world
+
+# ============================================================
+#  VOLUMES (Persistent State)
+# ============================================================
+volumes:
+  mongo-data:        # MongoDB data — survives container restart
+    driver: local
+  redis-data:        # Redis persistence — RDB snapshots
+    driver: local
+  backend-logs:      # Backend log files
+    driver: local
+  portainer-data:    # Portainer settings persistence
+    driver: local
+
+# ============================================================
+#  SERVICES
+# ============================================================
+services:
+
+  # ──────────────────────────────────────
+  # 0. PORTAINER — Web UI for Docker
+  # ──────────────────────────────────────
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: incredibleindia-portainer
+    restart: always
+    ports:
+      - "9001:9000"        # Web UI port (9001 on host)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock   # Docker access
+      - portainer-data:/data
+    networks:
+      - frontend-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # ──────────────────────────────────────
+  # 1. FRONTEND — Nginx Static Server
+  # ──────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      target: production
+    container_name: incredibleindia-frontend
+    restart: always
+    ports:
+      - "80:80"           # Only this port exposed to world
+    networks:
+      - frontend-net
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      - TZ=Asia/Kolkata
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+
+  # ──────────────────────────────────────
+  # 2. BACKEND — Node.js + Express API
+  # ──────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: production
+    container_name: incredibleindia-backend
+    restart: always
+    expose:
+      - "3000"             # Only internal — nginx proxies to this
+    networks:
+      - frontend-net
+      - backend-net
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - MONGO_URI=${MONGO_URI}            # Loaded from .env
+      - REDIS_URL=redis://redis:6379
+      - TZ=Asia/Kolkata
+    volumes:
+      - backend-logs:/app/logs            # Persist logs
+    healthcheck:
+      test: ["CMD", "node", "-e",
+             "require('http').get('http://localhost:3000/health', (r) => process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+  # ──────────────────────────────────────
+  # 3. MONGODB — Persistent Database
+  # ──────────────────────────────────────
+  mongodb:
+    image: mongo:7.0-jammy
+    container_name: incredibleindia-mongodb
+    restart: always
+    expose:
+      - "27017"            # Internal ONLY — never exposed to host
+    networks:
+      - backend-net
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USER}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASS}
+      - MONGO_INITDB_DATABASE=incredibleindia
+    volumes:
+      - mongo-data:/data/db              # CRITICAL: persistent storage
+      - mongo-data:/data/configdb
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  # ──────────────────────────────────────
+  # 4. REDIS — Cache + Session Store
+  # ──────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    container_name: incredibleindia-redis
+    restart: always
+    expose:
+      - "6379"             # Internal ONLY
+    networks:
+      - backend-net
+    command: >
+      redis-server
+      --save 60 1
+      --save 300 10
+      --appendonly yes
+      --appendfsync everysec
+      --requirepass ${REDIS_PASSWORD}
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data                 # RDB + AOF persistence
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$REDIS_PASSWORD\" ping | grep PONG"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M

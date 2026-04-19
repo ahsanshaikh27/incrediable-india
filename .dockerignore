@@ -1,0 +1,48 @@
+# ============================================
+# .dockerignore — Backend + Frontend
+# ============================================
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Node
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment files (NEVER in image!)
+.env
+.env.*
+*.env
+
+# Docker files (don't nest inside images)
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Docs & markdown (not needed at runtime)
+README.md
+presentation.md
+*.md
+
+# Logs
+logs/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Test files
+*.test.js
+*.spec.js
+__tests__/
+coverage/
